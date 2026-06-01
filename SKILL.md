@@ -1,6 +1,6 @@
 ---
 name: autoresearch
-description: Autonomously research an ML task and run MANY bounded experiments to find the best config — a fixed-budget edit→train→eval→keep-or-discard loop in the spirit of karpathy/autoresearch, wrapped in the ml-intern orchestrator model and fanned out with a Claude Code dynamic workflow. Triggers when the user wants to "run many experiments", "sweep / search for the best config", "beat a benchmark", "do an ablation", "autoresearch X", or "find what improves metric Y on dataset Z". Researches SOTA via PapersWithCode + web search FIRST, then ASKS where to get GPUs ("cards") and data before spending any compute, generates an experiment matrix, runs it as a background workflow under an explicit budget, keeps a running leaderboard, verifies winners, and reports the best config. Reuses ml-intern's notify.sh + hf_push.sh for milestone alerts and HF Hub publishing.
+description: Autonomously research an ML task and run MANY bounded experiments to find the best config — a fixed-budget edit→train→eval→keep-or-discard loop in the spirit of karpathy/autoresearch, wrapped in the ml-intern orchestrator model and fanned out with a Claude Code dynamic workflow. Triggers when the user wants to "run many experiments", "sweep / search for the best config", "beat a benchmark", "do an ablation", "autoresearch X", or "find what improves metric Y on dataset Z". Deep-researches existing solutions across the internet FIRST (fan-out web search + PapersWithCode, sources cross-checked into a cited DEEPRESEARCH.md), then ASKS where to get GPUs ("cards") and data before spending any compute, generates an experiment matrix, runs it as a background workflow under an explicit budget, keeps a running leaderboard, verifies winners, and reports the best config. Reuses ml-intern's notify.sh + hf_push.sh for milestone alerts and HF Hub publishing.
 ---
 
 # autoresearch — Claude Code skill
@@ -31,13 +31,18 @@ parent with `$AUTORESEARCH_RUNS_DIR`) and populate:
 1. **Restate** — write `TASK.md`: one paragraph of what the user asked, the unknowns and assumptions,
    the run mode (interactive vs headless/`-p`), and whether the task admits **many hypotheses worth
    sweeping** (it almost always does — that's the point of this skill).
-2. **Research (before clarify) + PapersWithCode** — gather the SOTA *before* asking the user
-   anything. Run `bash scripts/pwc_search.sh "<task>" papers` (and `… methods` / `… datasets`) for
-   methods, the benchmark + metric, candidate datasets, and arXiv links. Augment with
-   `WebSearch` / `WebFetch`, arXiv, HF Papers (`https://huggingface.co/papers/<id>`), and
-   `gh search code`. Write `RESEARCH.md` from `assets/research_card.template.md` (bullets + URLs, no
-   page dumps). Apply the **Research-before-clarify rule** (below). Fire `notify.sh plan_ready`
-   (and the additive `research_ready`).
+2. **Deep research the existing solutions (before clarify)** — *always start by going out to the
+   internet* and surveying what already exists; never jump to experiments on priors alone. Run a
+   **deep-research pass** (see "Deep research" below) that fans out across angles — SOTA methods, the
+   right benchmark + metric, public leaderboards, reference code repos, blog posts / tech reports, and
+   the *tricks and ablations* others already tried — fetches the sources, cross-checks claims, and
+   synthesizes a cited `DEEPRESEARCH.md`. Seed it with `bash scripts/pwc_search.sh "<task>" papers`
+   (and `… methods` / `… datasets`), HF Papers (`https://huggingface.co/papers/<id>`), and
+   `gh search code`. Then distil the findings into `RESEARCH.md` from
+   `assets/research_card.template.md` (bullets + URLs, no page dumps) — the SOTA table, chosen
+   baseline, and a list of **proven ideas to turn into experiments**. Apply the
+   **Research-before-clarify rule** (below). Fire `notify.sh plan_ready` (and the additive
+   `research_ready`).
 3. **Ask where to get CARDS and DATA** *(the user's explicit requirement)* — confirm compute and
    data **before** any fan-out (workflows take no mid-run input, so this cannot wait).
    - **Interactive:** one `AskUserQuestion` bundling **compute** (Kaggle notebooks / Local GPU /
@@ -96,6 +101,30 @@ autoresearch events (`research_ready`, `compute_ready`, `experiment_kept`) work 
 change**. The notifier is a graceful no-op when tokens are unset — always call it, never gate on
 token presence. If ml-intern is not installed, skip notifications with a one-line notice and continue
 — the research + experiment loop does not depend on it.
+
+## Deep research (existing solutions)
+
+Before designing any experiment, do a real internet survey of what already works — this is what makes
+the experiment matrix good instead of guessed. Prefer the strongest tool available, in this order:
+
+1. **`deep-research` workflow / skill** — if a `/deep-research` bundled workflow or a `deep-research`
+   skill is available, invoke it with a focused question ("existing solutions, SOTA methods, and known
+   tricks for `<task>` on `<benchmark>`; return methods, metrics, code links, and what improved
+   results"). It fans out web searches across angles, fetches and **cross-checks** sources, and
+   returns a cited report — capture that report into `DEEPRESEARCH.md`.
+2. **Manual fan-out** (fallback when neither is available) — issue several `WebSearch` queries from
+   *different angles* (e.g. `"<task> state of the art"`, `"<task> github"`, `"<benchmark> leaderboard"`,
+   `"<task> tricks / ablation / what works"`, `"<model> reproduce results"`), `WebFetch` the top
+   sources, plus `pwc_search.sh`, HF Papers, and `gh search code`. Cross-check: when two sources
+   disagree on a number or a claim, note both and trust the one with code/leaderboard backing.
+
+`DEEPRESEARCH.md` should capture, with a URL on every claim: the current SOTA + metric, the top
+existing solutions (method → result → code), the **concrete tricks/hyperparameters that moved the
+metric** (these become experiment hypotheses), known failure modes/pitfalls, and dataset notes. Keep
+it cited and skimmable — no page dumps. `RESEARCH.md` is the distilled decision layer on top of it;
+`PLAN.md`'s experiment matrix should be **traceable to ideas found here** (each hypothesis points at
+the source that suggested it). Never spend compute on an idea the literature already shows fails
+unless you're deliberately re-checking it.
 
 ## Research-before-clarify rule
 
@@ -201,8 +230,9 @@ user. Never silently retry forever — and never relaunch a failing workflow mor
 
 ## Context discipline
 
-- `RESEARCH.md`, `PLAN.md`, `program.md` are for humans skimming later: bullets, URLs, tables — no
-  dumps. The dynamic workflow keeps per-experiment results in script variables, **not** your context.
+- `DEEPRESEARCH.md`, `RESEARCH.md`, `PLAN.md`, `program.md` are for humans skimming later: bullets,
+  URLs, tables — no dumps. `DEEPRESEARCH.md` keeps citations; `RESEARCH.md` is the distilled layer.
+  The dynamic workflow keeps per-experiment results in script variables, **not** your context.
 - Never paste >50 lines of a dataset / log / file into chat; use `head`, `tail`, `wc -l`, `grep`.
 - If context is filling: write to `~/autoresearch-runs/<slug>/notes/` and move on.
 

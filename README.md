@@ -8,8 +8,11 @@ with a [Claude Code dynamic workflow](https://code.claude.com/docs/en/workflows)
 
 ## What it does
 
-1. **Researches the SOTA first** — searches PapersWithCode (`scripts/pwc_search.sh`) + web/arXiv/HF
-   Papers for methods, the right benchmark + metric, leaderboard rows, and reference code.
+1. **Deep-researches existing solutions first** — runs a fan-out internet survey (the `deep-research`
+   workflow/skill when available, else manual multi-angle `WebSearch`/`WebFetch`) plus PapersWithCode
+   (`scripts/pwc_search.sh`), arXiv and HF Papers. Cross-checks sources into a cited `DEEPRESEARCH.md`
+   covering SOTA methods, benchmark + metric, reference code, and the tricks that already moved the
+   metric — which become experiment hypotheses.
 2. **Asks where to get the "cards" (GPUs) and the data** — confirms the compute provider
    (Kaggle notebooks / Local GPU / Cloud SSH) and dataset source **before** spending any compute.
 3. **Plans an experiment matrix** — writes an editable `program.md` (you program this, not the
@@ -40,7 +43,8 @@ too (optional — without it, alerts/publishing are skipped, the research + expe
 | file | what |
 |------|------|
 | `TASK.md` | restated task, unknowns, run mode |
-| `RESEARCH.md` | SOTA table, benchmark+metric, leaderboard, code links |
+| `DEEPRESEARCH.md` | cited internet survey of existing solutions + tricks |
+| `RESEARCH.md` | distilled SOTA table, benchmark+metric, leaderboard, code links |
 | `COMPUTE.md` / `DATA.md` | chosen GPU provider / dataset source |
 | `BUDGET.md` | metric, #experiments, seconds each, caps, spent |
 | `program.md` | the single human-editable run spec (karpathy style) |
