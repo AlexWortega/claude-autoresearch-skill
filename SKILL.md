@@ -32,8 +32,8 @@ parent with `$AUTORESEARCH_RUNS_DIR`) and populate:
    the run mode (interactive vs headless/`-p`), and whether the task admits **many hypotheses worth
    sweeping** (it almost always does — that's the point of this skill).
 2. **Research (before clarify) + PapersWithCode** — gather the SOTA *before* asking the user
-   anything. Run `bash scripts/pwc_search.sh "<task>" papers` (and `… sota` / `… datasets`) for
-   methods, the benchmark + metric, leaderboard rows, and official-code links. Augment with
+   anything. Run `bash scripts/pwc_search.sh "<task>" papers` (and `… methods` / `… datasets`) for
+   methods, the benchmark + metric, candidate datasets, and arXiv links. Augment with
    `WebSearch` / `WebFetch`, arXiv, HF Papers (`https://huggingface.co/papers/<id>`), and
    `gh search code`. Write `RESEARCH.md` from `assets/research_card.template.md` (bullets + URLs, no
    page dumps). Apply the **Research-before-clarify rule** (below). Fire `notify.sh plan_ready`
@@ -109,12 +109,14 @@ is **not** subject to this rule — always ask it, since only the user knows the
 
 ## PapersWithCode usage
 
-`scripts/pwc_search.sh "<query>" [papers|datasets|methods|sota]` curls the PapersWithCode API
-(`https://paperswithcode.com/api/v1/...`) and prints compact JSON (id, title, metric, leaderboard,
-official-code URL). **Caveat: PapersWithCode was sunset by Meta in 2025**, so the API may be offline
-or empty. The script exits non-zero with a one-line notice when that happens — when it does, **fall
-back** to `WebSearch` + arXiv + HF Papers + the `paperswithcode/paperswithcode-data` GitHub mirror,
-and note the fallback in `RESEARCH.md`. Never hang on a dead endpoint.
+`scripts/pwc_search.sh "<query>" [papers|datasets|methods]` curls the **live PapersWithCode API at
+`https://paperswithcode.co/api/v1/...`** (the old `.com` was retired; override with `PWC_BASE` if it
+moves again) and prints compact JSON (papers: id/title/arxiv_id/url; datasets: id/name/slug;
+methods: id/name/description). The `papers/`, `datasets/`, and `methods/` endpoints work; there is no
+`search/` or `sota/` endpoint — for a benchmark leaderboard, pull the top `papers` hits plus a
+targeted `WebSearch`/`WebFetch` of the benchmark page. The script exits non-zero with a one-line
+notice if the API is unreachable or returns nothing — when it does, **fall back** to `WebSearch` +
+arXiv + HF Papers and note the fallback in `RESEARCH.md`. Never hang on a dead endpoint.
 
 ## Compute providers
 

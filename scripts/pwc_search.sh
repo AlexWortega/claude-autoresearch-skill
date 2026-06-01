@@ -1,28 +1,25 @@
 #!/usr/bin/env bash
 # autoresearch — PapersWithCode search (with graceful failure for the web-search fallback).
-# Usage: pwc_search.sh "<query>" [papers|datasets|methods|sota]
+# Usage: pwc_search.sh "<query>" [papers|datasets|methods]
 # Prints top hits as JSON. Exits non-zero if the API is unreachable/empty so the
-# skill knows to fall back to WebSearch + arXiv + HF Papers (PwC was sunset by Meta in 2025).
+# skill knows to fall back to WebSearch + arXiv + HF Papers.
+#
+# NOTE: the live API now lives at paperswithcode.co (the old .com was retired).
+# Override with PWC_BASE if it moves again.
 
 set -u
-query="${1:?usage: pwc_search.sh \"<query>\" [papers|datasets|methods|sota]}"
+query="${1:?usage: pwc_search.sh \"<query>\" [papers|datasets|methods]}"
 kind="${2:-papers}"
 limit="${PWC_LIMIT:-8}"
+base="${PWC_BASE:-https://paperswithcode.co/api/v1}"
 
 case "$kind" in
-  papers|datasets|methods|sota) ;;
-  *) echo "second arg must be one of: papers datasets methods sota" >&2; exit 2 ;;
+  papers|datasets|methods) ;;
+  *) echo "second arg must be one of: papers datasets methods" >&2; exit 2 ;;
 esac
 
 q="$(printf '%s' "$query" | jq -sRr @uri)"
-base="https://paperswithcode.com/api/v1"
-
-case "$kind" in
-  papers)   url="${base}/papers/?q=${q}&items_per_page=${limit}" ;;
-  datasets) url="${base}/datasets/?q=${q}&items_per_page=${limit}" ;;
-  methods)  url="${base}/methods/?q=${q}&items_per_page=${limit}" ;;
-  sota)     url="${base}/search/?q=${q}&items_per_page=${limit}" ;;
-esac
+url="${base}/${kind}/?q=${q}&items_per_page=${limit}"
 
 resp="$(curl -fsS -m 15 -H 'Accept: application/json' "$url" 2>/dev/null)" || {
   echo "pwc_search.sh: PapersWithCode API unreachable for '${query}' (${kind}) — fall back to WebSearch/arXiv/HF Papers" >&2
@@ -36,14 +33,12 @@ if [ -z "$count" ] || [ "$count" = "0" ] || [ "$count" = "null" ]; then
   exit 3
 fi
 
-# Project the useful fields per kind; keep it compact (no page dumps).
+# Project the useful fields per kind; keep it compact (no page dumps). // null guards missing keys.
 case "$kind" in
   papers)
-    printf '%s' "$resp" | jq '[.results[] | {id, title, url_abs, url_pdf, published, proceeding}]' ;;
+    printf '%s' "$resp" | jq '[.results[] | {id, title, arxiv_id: (.arxiv_id // null), url_abs: (.url_abs // null), url_pdf: (.url_pdf // null), published: (.published // null)}]' ;;
   datasets)
-    printf '%s' "$resp" | jq '[.results[] | {id, name, full_name, url, paper}]' ;;
+    printf '%s' "$resp" | jq '[.results[] | {id, name, full_name: (.full_name // null), slug: (.slug // null), url: (.url // null)}]' ;;
   methods)
-    printf '%s' "$resp" | jq '[.results[] | {id, name, full_name, description: (.description[0:160])}]' ;;
-  sota)
-    printf '%s' "$resp" | jq '.' ;;
+    printf '%s' "$resp" | jq '[.results[] | {id, name, full_name: (.full_name // null), slug: (.slug // null), description: (.description[0:160])}]' ;;
 esac
