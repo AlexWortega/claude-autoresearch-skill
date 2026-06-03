@@ -196,8 +196,13 @@ await agent(
 // === generational loop ======================================================
 let gen = 1
 let stagnant = 0
-while (gen < MAX_GENERATIONS && stagnant < STAGNATION && (!budget.total || budget.remaining() > 60000)) {
-  const explore = stagnant >= 1
+let dryRounds = 0 // consecutive rung-3 generations that produced nothing new → real convergence
+// stagnation does NOT end the loop; it climbs the lever ladder. The loop ends only on budget,
+// the per-batch max_generations, or genuine convergence (rung-3 dry for 2 rounds).
+while (gen < MAX_GENERATIONS && dryRounds < 2 && (!budget.total || budget.remaining() > 60000)) {
+  // rung 1 = tweak champion · rung 2 = orthogonal axis · rung 3 = structural new lever
+  const rung = stagnant < STAGNATION ? 1 : stagnant < 2 * STAGNATION ? 2 : 3
+  const N = Math.max(2, Math.ceil((K * 1.5) / PROPOSERS))
 
   // --- PROPOSE: parallel teams read the board, propose fresh hypotheses ------
   const proposePrompt = (t) =>
@@ -208,10 +213,12 @@ while (gen < MAX_GENERATIONS && stagnant < STAGNATION && (!budget.total || budge
       `Current ${championSummary()}.`,
       triedSummary(),
       ``,
-      explore
-        ? `The loop is STAGNATING — the recent direction is exhausted. Propose ${Math.max(2, Math.ceil(K * 1.5))} ORTHOGONAL, exploratory hypotheses that move away from the champion's family of changes.`
-        : `Propose ${Math.max(2, Math.ceil(K * 1.5 / PROPOSERS))} fresh hypotheses that build on the champion (or open ideas in program.md).`,
-      `Hard rules: each is exactly ONE variable changed vs the champion/baseline so results stay comparable; do NOT repeat or trivially reword anything already tried; cite the board/DEEPRESEARCH in the rationale where possible.`,
+      rung === 1
+        ? `Propose ${N} fresh hypotheses that build on the champion (or open ideas in program.md). Each is exactly ONE variable changed vs the champion/baseline so results stay comparable.`
+        : rung === 2
+          ? `The champion's family is EXHAUSTED. Propose ${N} ORTHOGONAL hypotheses on a different axis (regularization, data mix, tokenizer, augmentation, schedule) the champion does not touch — still one-variable each.`
+          : `The search is STUCK across tweaks AND axes. Propose ${N} STRUCTURAL NEW LEVERS — different methods, not tweaks: replace the algorithm / solver, swap the harness, change the modelling approach (e.g. a learned ranker instead of brute search, a graph/transformer reframe, distillation instead of RL). Each lever is its own new baseline; describe the concrete change to make. Mine DEEPRESEARCH.md "future work" and FINDINGS.md "Next levers" for these.`,
+      `Hard rules: do NOT repeat or trivially reword anything already tried; cite the board/DEEPRESEARCH in the rationale where possible.`,
     ].join('\n')
 
   const batches = await parallel(
@@ -228,7 +235,8 @@ while (gen < MAX_GENERATIONS && stagnant < STAGNATION && (!budget.total || budge
     }
   }
   if (!fresh.length) {
-    log(`gen ${gen}: no fresh hypotheses survived dedup → stagnating`)
+    log(`gen ${gen}: no fresh hypotheses survived dedup (rung ${rung}) → stagnating`)
+    if (rung === 3) dryRounds++
     stagnant++
     gen++
     continue
@@ -264,8 +272,9 @@ while (gen < MAX_GENERATIONS && stagnant < STAGNATION && (!budget.total || budge
     .slice(0, K)
     .map(({ p }) => p)
 
-  log(`gen ${gen}: ${fresh.length} proposed → ${survivors.length} survive peer-critique`)
+  log(`gen ${gen}: ${fresh.length} proposed → ${survivors.length} survive peer-critique (rung ${rung})`)
   if (!survivors.length) {
+    if (rung === 3) dryRounds++
     stagnant++
     gen++
     continue
@@ -274,6 +283,7 @@ while (gen < MAX_GENERATIONS && stagnant < STAGNATION && (!budget.total || budge
   // --- EXPERIMENT + VERIFY ---------------------------------------------------
   const results = await runGeneration(gen, survivors)
   const newChampion = ingest(gen, results)
+  dryRounds = 0 // this generation produced runnable ideas → not converged
   stagnant = newChampion ? 0 : stagnant + 1
 
   // --- SHARE: persist this generation to the board on disk -------------------
@@ -281,8 +291,9 @@ while (gen < MAX_GENERATIONS && stagnant < STAGNATION && (!budget.total || budge
     [
       `Record generation ${gen} on the shared board in ${RUN_DIR}.`,
       `Append these results as JSONL rows to board.jsonl, update FINDINGS.md (what was tried, what improved, what to avoid next), and rewrite leaderboard.md (best-so-far, sorted ${DIRECTION}).`,
+      `Also maintain a "Next levers" list in FINDINGS.md — structural reframes worth trying if the current axis stalls — so the loop always has somewhere to climb.`,
       `Results JSON: ${JSON.stringify(board.filter((b) => b.gen === gen))}`,
-      `Current ${championSummary()}. ${newChampion ? 'A NEW CHAMPION was crowned this generation.' : `No improvement (${stagnant}/${STAGNATION} stagnant generations).`}`,
+      `Current ${championSummary()} (lever rung ${rung}). ${newChampion ? 'A NEW CHAMPION was crowned this generation.' : `No improvement (${stagnant} stagnant; rung climbs at ${STAGNATION}/${2 * STAGNATION}).`}`,
     ].join('\n'),
     { label: `g${gen}/share`, phase: 'Share' },
   )
@@ -290,7 +301,10 @@ while (gen < MAX_GENERATIONS && stagnant < STAGNATION && (!budget.total || budge
   gen++
 }
 
-const stop = gen >= MAX_GENERATIONS ? 'max_generations' : stagnant >= STAGNATION ? 'stagnation' : 'budget'
+// Why the loop ended. Only 'budget'/'converged' are real stops; 'batch_end' means relaunch
+// on the next lever if budget remains (the orchestrator's outer driver, per SKILL.md).
+const budgetSpent = budget.total && budget.remaining() <= 60000
+const stop = budgetSpent ? 'budget' : dryRounds >= 2 ? 'converged' : 'batch_end'
 log(`autoresearch loop done after ${gen} generations (stop=${stop}); ${board.filter((b) => b.verified).length} verified wins`)
 
 const verified = board.filter((b) => b.verified).sort((a, b) => (DIRECTION === 'lower' ? a.metric - b.metric : b.metric - a.metric))
@@ -299,6 +313,9 @@ return {
   direction: DIRECTION,
   generations: gen,
   stop_reason: stop,
+  // The orchestrator MUST relaunch (next generation batch / next lever) when this is true,
+  // without asking the user — see SKILL.md "Outer driver" + "Autonomy mandate".
+  relaunch: stop === 'batch_end',
   champion,
   verified_wins: verified.map((r) => ({ gen: r.gen, exp_id: r.exp_id, metric: r.metric, delta: r.delta, note: r.note })),
   board,

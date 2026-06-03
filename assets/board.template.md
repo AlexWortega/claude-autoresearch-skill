@@ -18,8 +18,13 @@
 ## What does NOT work (dead ends — do not re-propose)
 - <change> — <why it failed / no improvement> (gen <g>)
 
-## Open directions (promising, not yet run)
+## Open directions (within the current lever, not yet run)
 - <hypothesis> — why it might help — which champion it builds on
 
-## Stagnation log
-- gen <g>: <new champion | no improvement (n/STAGNATION)>
+## Next levers (structural reframes — climb here when the current axis stalls)
+> rung-3 ideas: a *different method*, not a tweak (new algorithm/solver, new harness, new modelling
+> approach). The loop escalates to these on stagnation; each becomes its own `program.md` baseline.
+- <lever> — what it replaces — why it could beat the current approach — source (DEEPRESEARCH §)
+
+## Stagnation / lever log
+- gen <g>: <new champion | no improvement, rung <1|2|3> (escalates at STAGNATION / 2×STAGNATION)>

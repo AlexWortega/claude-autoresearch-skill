@@ -21,6 +21,47 @@ asking the user anything**, then **ask where the GPUs ("cards") and data come fr
 compute**, run the experiment matrix as a background **dynamic workflow**, and verify every kept
 winner against a real held-out metric.
 
+## Autonomy mandate (do NOT be lazy — this is the most important rule)
+
+This skill's failure mode is **stopping too early and handing the work back to the human**. Fight it:
+
+- **Cards + data are the ONLY approval gate.** Once `COMPUTE.md` and `DATA.md` are settled, launching
+  in-budget, non-destructive experiments — and **generating the next lever when the current one is
+  exhausted** — is your *default action*, not something to confirm. You already have standing
+  authorization; use it.
+- **Never end a turn with "should I continue?" / "Поехали?" / "запустить?" while budget remains and
+  the backlog is non-empty.** Proposing a good idea and then waiting to be poked is the exact lazy
+  behaviour this skill exists to prevent. See a promising, in-budget, non-destructive lever → **launch
+  it**, then report what you launched. Asking permission to keep researching is a failure of the skill.
+- **"Stuck" means escalate the search space, not stop.** Running out of one-variable tweaks is NOT a
+  done condition — it is the trigger to climb the **lever ladder** (below). You only truly stop when
+  the budget is spent or you have climbed the whole ladder and the lever-generator itself returns
+  nothing new for two rounds. Exhausting a *sub*-space is never exhausting the *task*.
+- **The budget is a floor as well as a ceiling.** The caps and the doom-loop guard exist to stop
+  *runaway repetition* — they do **not** license quitting with budget left. While `compute_cap` /
+  generations / tokens remain and there is any untried promising direction, you must keep going on
+  your own initiative.
+- Genuine blockers (no compute reachable, a true ambiguity only the user can resolve, a destructive
+  op) still pause and ask. "I'm out of small tweaks" is not a blocker — it's the next lever.
+
+## Lever ladder (how to escape a stuck search)
+
+A **lever** is the axis the search moves along. autoresearch is excellent at optimizing *within* a
+lever and blind to *changing* the lever unless told to — so make changing it explicit. When a lever
+stagnates, climb one rung; each rung is a wider reframe and becomes its own new baseline to optimize:
+
+1. **Hyperparameter tweak** — one variable vs the champion (lr, depth, schedule…). The default loop.
+2. **Orthogonal axis** — a different family of one-variable changes (regularization, data mix,
+   tokenizer, augmentation) the champion's family doesn't touch.
+3. **New lever / structural reframe** — a *different method*, not a tweak: replace the algorithm,
+   swap the harness file, change the solver (e.g. "learned edge-ranker instead of BFS", "graph
+   transformer over the state graph", "distillation instead of RL"). This is normally outside the
+   "one diff to `train.py`" frame — **on stagnation you are required to generate levers at this rung**,
+   give each its own `program.md` baseline, and sweep within it. Mine `DEEPRESEARCH.md` /
+   `FINDINGS.md` "future work" for these.
+
+Record candidate levers in `FINDINGS.md` → "Next levers" so the loop always has somewhere to climb.
+
 ## Workflow — orchestrator model
 
 You are the **orchestrator**. You own Restate / Research / Ask-for-cards-and-data / Plan / Provision
@@ -117,14 +158,21 @@ a common board** so the search compounds instead of repeating itself. One genera
    `board.jsonl`, rewrites the human `FINDINGS.md` (what worked, what to avoid, open directions), and
    updates `leaderboard.md` + the champion. The next generation's proposers read this — knowledge
    accumulates, redundancy is eliminated.
-5. **Champion + stagnation.** The best *verified* config is the champion; a new champion resets the
-   stagnation counter. After `__STAGNATION__` consecutive generations with no new champion, the
-   proposers are switched to **explore mode** (orthogonal, away-from-champion ideas) for one round,
-   and if still stuck the loop **exits**.
+5. **Champion + stagnation → climb the lever ladder.** The best *verified* config is the champion; a
+   new champion resets the stagnation counter. After `__STAGNATION__` no-champion generations the loop
+   does **not** quit — it climbs one rung of the lever ladder: first switch proposers to **orthogonal
+   axis** mode (rung 2), and if still stuck after another `__STAGNATION__` generations switch to
+   **new-lever mode** (rung 3) — proposers must now propose *structural reframes* (a different method,
+   a new harness/baseline), each becoming its own `program.md` and a fresh sub-search. Append every
+   reframe to `FINDINGS.md` → "Next levers". This is exactly the escape the human shouldn't have to
+   trigger by hand.
 
-The loop runs until any **exit condition**: `max_generations` reached, `stagnation` generations with
-no improvement, or the token budget runs low (`budget.remaining()` guard inside the workflow). This is
-what lets a run go for **hours or days** on a single `Workflow` launch.
+The loop only truly **exits** when: the `compute_cap` / token budget is spent, OR you have climbed to
+rung 3 and the lever-generator returns no new structural idea for two consecutive rounds (real
+convergence), OR `max_generations` is hit *and* budget remains *and* there are queued "Next levers" —
+in which case you **relaunch** (see "Staying alive") rather than report-and-stop. `max_generations` is
+a per-workflow batch size, **not** the end of the task. This is what lets a run go for **hours or
+days** — across many workflow relaunches, not one finite run.
 
 ### Staying alive across context windows
 
@@ -142,6 +190,17 @@ finishes. For genuinely long runs:
   fixed short poll.
 - Update `BUDGET.md` spent and fire `notify.sh experiment_kept "<new champion>"` on each champion
   change so the user sees progress without reading logs.
+
+**Outer driver (this is what makes it actually long-running).** A `Workflow` runs once and returns —
+it does **not** relaunch itself. So *you*, the orchestrator, are the loop around the loop. When a
+workflow returns, do **not** stop to ask: read its result + `FINDINGS.md` "Next levers", and **if the
+budget still has room and any untried lever/direction remains, immediately launch the next batch on
+your own initiative** (a new generation batch on the current lever, or a fresh `program.md` for the
+next lever up the ladder). Only write `RESULTS.md` and stop when the budget is spent or the lever
+ladder is genuinely exhausted (rung 3 dry for two rounds). To survive your own context limits across
+this outer loop, drive it with `/loop` (self-paced) or `ScheduleWakeup` so a fresh context re-enters
+the skill, reads the on-disk board, and relaunches — the run continues for days without the user
+poking it.
 
 ## Notifications
 
@@ -248,7 +307,10 @@ Defaults when the user gives nothing: `seed_experiments=6`, `seconds_per_experim
 `hypotheses_per_gen=4`, `proposers=3`, `critics=3`, `stagnation=3`. For a one-round run set
 `max_generations=1` (degenerates to the single-pass template). Scale `max_generations`/`compute_cap`
 up for "overnight" / "for days" requests. Update the `spent` block as experiments finish. **Stop
-launching new experiments the moment any cap is hit** — part of the doom-loop guard, not optional.
+launching new experiments the moment a *compute/token cap* is hit** — part of the doom-loop guard, not
+optional. But note the asymmetry: hitting `max_generations` or `stagnation` is **not** a cap — it is a
+signal to climb the lever ladder and relaunch (see Autonomy mandate). Only the `compute_cap` / token
+budget actually ends the run early.
 
 ## `EXPERIMENTS.md` ledger
 
