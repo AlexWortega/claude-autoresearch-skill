@@ -1,6 +1,6 @@
 ---
 name: autoresearch
-description: Autonomously research an ML task and run MANY bounded experiments to find the best config — a fixed-budget edit→train→eval→keep-or-discard loop in the spirit of karpathy/autoresearch, wrapped in the ml-intern orchestrator model and fanned out with a Claude Code dynamic workflow. Triggers when the user wants to "run many experiments", "sweep / search for the best config", "beat a benchmark", "do an ablation", "autoresearch X", or "find what improves metric Y on dataset Z". Deep-researches existing solutions across the internet FIRST (fan-out web search + PapersWithCode, sources cross-checked into a cited DEEPRESEARCH.md), then ASKS where to get GPUs ("cards") and data before spending any compute, generates an experiment matrix, runs it as a background workflow under an explicit budget, keeps a running leaderboard, verifies winners, and reports the best config. Reuses ml-intern's notify.sh + hf_push.sh for milestone alerts and HF Hub publishing.
+description: Autonomously research an ML task and run MANY bounded experiments to find the best config — a fixed-budget edit→train→eval→keep-or-discard loop in the spirit of karpathy/autoresearch, wrapped in the ml-intern orchestrator model and fanned out with a Claude Code dynamic workflow. Runs LONG: an iterative generational loop (mims-harvard/AutoScientists style) where parallel agent teams propose hypotheses, peer-critique them before spending any GPU, share findings on a common board, promote a champion, and keep going until budget/stagnation/convergence. Triggers when the user wants to "run many experiments", "sweep / search for the best config", "beat a benchmark", "do an ablation", "autoresearch X", "run for a long time / overnight / for days", or "find what improves metric Y on dataset Z". Deep-researches existing solutions across the internet FIRST (fan-out web search + PapersWithCode, sources cross-checked into a cited DEEPRESEARCH.md), then ASKS where to get GPUs ("cards") and data before spending any compute, generates an experiment matrix, runs it as a background workflow under an explicit budget, keeps a running leaderboard + shared findings board, verifies winners, and reports the best config. Reuses ml-intern's notify.sh + hf_push.sh for milestone alerts and HF Hub publishing.
 ---
 
 # autoresearch — Claude Code skill
@@ -68,22 +68,80 @@ parent with `$AUTORESEARCH_RUNS_DIR`) and populate:
      `notify.sh approval_required "design-only: no compute reachable"`, print run instructions, and
      stop. Do **not** fabricate metrics.
    Record the outcome in `COMPUTE.md` and fire the additive `compute_ready`.
-6. **Fan-out experiments (dynamic workflow)** — substitute the placeholders in
-   `assets/experiment_workflow.template.js` (`__RUN_DIR__`, `__SECONDS__`, `__METRIC__`,
-   `__DIRECTION__`, `__EXPERIMENTS_JSON__` from `PLAN.md`), write it to `<run>/workflow.js`, and run
-   it with the **`Workflow` tool** (`{scriptPath: "<run>/workflow.js"}`). Each experiment is a
-   subagent that copies the baseline harness into `exp-<id>/`, applies **one** diff, trains for the
-   fixed time budget, evals the metric, compares to baseline, and returns a **concise structured
-   result only** (`exp_id, metric, delta, keep, note`) — never log dumps. Kept winners are
-   adversarially re-checked in the workflow's `Verify` phase. Append one `EXPERIMENTS.md` row per
-   result, update `BUDGET.md` spent, and maintain `leaderboard.md` (best-so-far, sorted). Fire the
-   additive `experiment_kept` when a verified winner takes the top spot.
-   - If workflows are disabled or the matrix is tiny (≤3), fall back to spawning `Agent` subagents
-     in parallel (one per experiment) — same contract, just orchestrated by you turn-by-turn.
+6. **Run the generational research loop (dynamic workflow)** — this is the long-running heart of the
+   skill (see "Long-running iterative loop" below). Substitute the placeholders in
+   `assets/research_loop.template.js` (`__RUN_DIR__`, `__SECONDS__`, `__METRIC__`, `__DIRECTION__`,
+   `__SEED_EXPERIMENTS_JSON__` from `PLAN.md`, plus `__MAX_GENERATIONS__`, `__HYPOTHESES_PER_GEN__`,
+   `__PROPOSERS__`, `__CRITICS__`, `__STAGNATION__` from `BUDGET.md`), write it to `<run>/workflow.js`,
+   seed the shared board from `assets/board.template.md` → `<run>/FINDINGS.md`, and run it with the
+   **`Workflow` tool** (`{scriptPath: "<run>/workflow.js"}`, in the background). The workflow loops
+   over **generations**: parallel proposer teams read the board and propose fresh one-variable
+   hypotheses, a peer-critic panel prunes redundant/weak ones **before** any GPU is spent, survivors
+   train for the fixed budget and eval the metric, kept winners are adversarially re-checked, and the
+   `Share` phase appends results to `board.jsonl`/`FINDINGS.md` + rewrites `leaderboard.md` and the
+   champion. Each experiment returns a **concise structured result only** (`exp_id, metric, delta,
+   keep, note`) — never log dumps. The loop keeps going until `__MAX_GENERATIONS__`, `__STAGNATION__`
+   consecutive no-improvement generations, or the token budget runs low. Append one `EXPERIMENTS.md`
+   row per result and update `BUDGET.md` spent. Fire the additive `experiment_kept` when a verified
+   winner takes the top spot (new champion).
+   - **Single-pass fallback**: if the matrix is tiny (≤3) or you explicitly want one round only, use
+     `assets/experiment_workflow.template.js` instead (no propose/critique loop — just fan out the
+     matrix once, verify, report).
+   - If workflows are disabled, fall back to spawning `Agent` subagents in parallel (one per
+     experiment) and run the propose→critique→experiment→verify→share generations yourself,
+     turn-by-turn — same contract, just orchestrated by you.
 7. **Aggregate & report** — write `RESULTS.md`: the **best verified config**, the full comparison
    table from `EXPERIMENTS.md`, and the winning diff vs baseline. Update `program.md`'s idea table.
    Optionally publish the winning config to the HF Hub via ml-intern's `hf_push.sh` (see
    "Publishing"). Fire `notify.sh train_done "<best metric> @ <run slug>"`.
+
+## Long-running iterative loop (the AutoScientists model)
+
+The default fan-out (step 6) is **not** a single pass over a fixed matrix — it is a long-running
+**generational loop**, adapted from `mims-harvard/AutoScientists`: parallel agent *teams* self-organize
+around the best ideas, **critique each other before spending compute**, and **share what they learn on
+a common board** so the search compounds instead of repeating itself. One generation:
+
+1. **Propose (parallel teams).** `__PROPOSERS__` proposer agents run concurrently, each reading the
+   shared board (`FINDINGS.md`, `leaderboard.md`, `DEEPRESEARCH.md`, `program.md`) and the current
+   **champion**, then proposing fresh **one-variable** hypotheses that build on what works. They are
+   told the list of changes already tried, so they do not re-propose dead ends.
+2. **Peer-critique (before any GPU).** A panel of `__CRITICS__` critic agents scores every proposal
+   (expected impact × plausibility, and a novelty check vs the board) **before** a single experiment
+   runs. Only proposals with a majority "novel" vote and a mean score ≥ 6/10 survive; the top
+   `__HYPOTHESES_PER_GEN__` go to compute. This is the cheap filter that keeps the GPU budget on
+   high-value ideas — the core AutoScientists "critique before you spend" idea.
+3. **Experiment + verify.** Survivors fan out exactly like the single-pass mode: copy harness, apply
+   one diff, train for `seconds_per_experiment`, eval, and adversarially re-check kept winners.
+4. **Share (update the board).** The `Share` phase appends this generation's results to
+   `board.jsonl`, rewrites the human `FINDINGS.md` (what worked, what to avoid, open directions), and
+   updates `leaderboard.md` + the champion. The next generation's proposers read this — knowledge
+   accumulates, redundancy is eliminated.
+5. **Champion + stagnation.** The best *verified* config is the champion; a new champion resets the
+   stagnation counter. After `__STAGNATION__` consecutive generations with no new champion, the
+   proposers are switched to **explore mode** (orthogonal, away-from-champion ideas) for one round,
+   and if still stuck the loop **exits**.
+
+The loop runs until any **exit condition**: `max_generations` reached, `stagnation` generations with
+no improvement, or the token budget runs low (`budget.remaining()` guard inside the workflow). This is
+what lets a run go for **hours or days** on a single `Workflow` launch.
+
+### Staying alive across context windows
+
+A workflow runs in the background and survives your own context compaction — you are notified when it
+finishes. For genuinely long runs:
+
+- **Launch in the background** and let the completion `<task-notification>` re-invoke you; do **not**
+  poll in a tight loop (that wastes the prompt cache — see ScheduleWakeup guidance).
+- **Checkpoint to disk every generation** (the `Share` phase already does this) so progress is durable.
+  If the workflow is killed or interrupted, **resume** it with `{scriptPath, resumeFromRunId}` — the
+  unchanged prefix of generations returns from cache and only the unfinished tail re-runs. The
+  on-disk board lets a fresh workflow pick up where the last one stopped.
+- If you must babysit an external provider (a Kaggle session, a cloud SSH job) the harness can't
+  notify you about, use `ScheduleWakeup` with a delay matched to how fast that state changes — not a
+  fixed short poll.
+- Update `BUDGET.md` spent and fire `notify.sh experiment_kept "<new champion>"` on each champion
+  change so the user sees progress without reading logs.
 
 ## Notifications
 
@@ -167,20 +225,30 @@ keep/discard loop:
 ```
 metric                = <name>     # e.g. val_bpb | val_loss | accuracy
 direction             = lower|higher   # which way is better
-max_experiments       = N          # size of the matrix this run
+seed_experiments      = N          # size of the generation-0 matrix from PLAN.md
 seconds_per_experiment = S         # fixed wall-clock train budget per experiment (karpathy default ~300)
 parallelism           = P          # concurrent experiments (≤ workflow cap of 16; lower if VRAM-bound)
 compute_cap           = H          # total GPU-hours OR wall-clock-hours for the whole run
+# --- generational loop (long-running) ---
+max_generations       = G          # hard cap on generations (the long-run bound)
+hypotheses_per_gen    = K          # how many proposals survive critique → run, per generation
+proposers             = Pn         # parallel proposer teams per generation
+critics               = Cn         # peer critics per proposal round (critique-before-compute)
+stagnation            = St         # exit after this many no-new-champion generations
 --- spent ---
+generations_run = 0
 experiments_run = 0
 gpu_min_used    = 0
 best_metric     = <baseline>
+champion        = <none yet>
 ```
 
-Defaults when the user gives nothing: `max_experiments=8`, `seconds_per_experiment=300`,
-`parallelism=4` (or 1 on a single local GPU), `compute_cap=2 GPU-h`. Update the `spent` block as
-experiments finish. **Stop launching new experiments the moment any cap is hit** — part of the
-doom-loop guard, not optional.
+Defaults when the user gives nothing: `seed_experiments=6`, `seconds_per_experiment=300`,
+`parallelism=4` (or 1 on a single local GPU), `compute_cap=2 GPU-h`, `max_generations=8`,
+`hypotheses_per_gen=4`, `proposers=3`, `critics=3`, `stagnation=3`. For a one-round run set
+`max_generations=1` (degenerates to the single-pass template). Scale `max_generations`/`compute_cap`
+up for "overnight" / "for days" requests. Update the `spent` block as experiments finish. **Stop
+launching new experiments the moment any cap is hit** — part of the doom-loop guard, not optional.
 
 ## `EXPERIMENTS.md` ledger
 
@@ -230,9 +298,11 @@ user. Never silently retry forever — and never relaunch a failing workflow mor
 
 ## Context discipline
 
-- `DEEPRESEARCH.md`, `RESEARCH.md`, `PLAN.md`, `program.md` are for humans skimming later: bullets,
-  URLs, tables — no dumps. `DEEPRESEARCH.md` keeps citations; `RESEARCH.md` is the distilled layer.
-  The dynamic workflow keeps per-experiment results in script variables, **not** your context.
+- `DEEPRESEARCH.md`, `RESEARCH.md`, `PLAN.md`, `program.md`, `FINDINGS.md` are for humans skimming
+  later: bullets, URLs, tables — no dumps. `DEEPRESEARCH.md` keeps citations; `RESEARCH.md` is the
+  distilled layer; `FINDINGS.md`/`board.jsonl` is the shared board the agent teams read+write each
+  generation. The dynamic workflow keeps the champion / seen-set / per-experiment results in script
+  variables, **not** your context — only the structured per-generation summaries cross into it.
 - Never paste >50 lines of a dataset / log / file into chat; use `head`, `tail`, `wc -l`, `grep`.
 - If context is filling: write to `~/autoresearch-runs/<slug>/notes/` and move on.
 
@@ -250,10 +320,11 @@ No `HF_TOKEN` (in ml-intern's `.env`) → fire `blocker` and skip publishing; do
 
 ## Done conditions
 
-A run is **done** when:
-- `BUDGET.md`, `EXPERIMENTS.md`, and `leaderboard.md` exist; every experiment is `passed`, `dropped`,
-  or `failed` (none left `running`), or the budget cap was hit and remaining experiments are recorded
-  as not-run.
+A run is **done** when the generational loop hits an exit condition (`max_generations`, `stagnation`,
+or budget) and:
+- `BUDGET.md`, `EXPERIMENTS.md`, `leaderboard.md`, and the shared board (`FINDINGS.md` + `board.jsonl`)
+  exist; every experiment is `passed`, `dropped`, or `failed` (none left `running`), or the budget cap
+  was hit and remaining experiments are recorded as not-run.
 - `RESULTS.md` exists naming the **best verified config** with the comparison table — **or**, in
   design-only mode, the experiment matrix + runnable harness + run instructions.
 - `notify.sh train_done "<best metric> @ <slug>"` fired (or `approval_required` for design-only).
