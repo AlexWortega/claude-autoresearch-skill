@@ -22,6 +22,7 @@ export const meta = {
 //   __PROPOSERS__             parallel proposer agents (teams) per generation
 //   __CRITICS__               peer critics per proposal round (peer-review-before-compute)
 //   __STAGNATION__            exit after this many generations with no new champion
+//   __BUDGET_TOTAL_MS__       whole-run wall-clock budget in milliseconds (0 = uncapped)
 // ---------------------------------------------------------------------------
 const RUN_DIR = '__RUN_DIR__'
 const SECONDS = __SECONDS__
@@ -33,6 +34,14 @@ const K = __HYPOTHESES_PER_GEN__
 const PROPOSERS = __PROPOSERS__
 const CRITICS = __CRITICS__
 const STAGNATION = __STAGNATION__
+const BUDGET_TOTAL_MS = __BUDGET_TOTAL_MS__
+const STARTED_AT = Date.now()
+const budget = {
+  total: BUDGET_TOTAL_MS,
+  remaining: () => (
+    BUDGET_TOTAL_MS ? Math.max(0, BUDGET_TOTAL_MS - (Date.now() - STARTED_AT)) : Infinity
+  ),
+}
 
 const better = (a, b) => (DIRECTION === 'lower' ? a < b : a > b)
 const improved = (delta) => (DIRECTION === 'lower' ? delta < 0 : delta > 0)

@@ -113,7 +113,8 @@ parent with `$AUTORESEARCH_RUNS_DIR`) and populate:
    skill (see "Long-running iterative loop" below). Substitute the placeholders in
    `assets/research_loop.template.js` (`__RUN_DIR__`, `__SECONDS__`, `__METRIC__`, `__DIRECTION__`,
    `__SEED_EXPERIMENTS_JSON__` from `PLAN.md`, plus `__MAX_GENERATIONS__`, `__HYPOTHESES_PER_GEN__`,
-   `__PROPOSERS__`, `__CRITICS__`, `__STAGNATION__` from `BUDGET.md`), write it to `<run>/workflow.js`,
+   `__PROPOSERS__`, `__CRITICS__`, `__STAGNATION__`, and `__BUDGET_TOTAL_MS__` derived from
+   `compute_cap` in `BUDGET.md`), write it to `<run>/workflow.js`,
    seed the shared board from `assets/board.template.md` → `<run>/FINDINGS.md`, and run it with the
    **`Workflow` tool** (`{scriptPath: "<run>/workflow.js"}`, in the background). The workflow loops
    over **generations**: parallel proposer teams read the board and propose fresh one-variable
