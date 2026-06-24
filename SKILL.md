@@ -23,6 +23,29 @@ kept winner against a real held-out metric. The experiment matrix must be **maxi
 ideas from different papers, different algorithmic families, different ML communities — not
 variations of the same guess.
 
+## HARD RULE: parallelism mandate — 3+ independent tasks → parallel agents, always
+
+**Sequential execution of independent tasks is a failure of this skill.** The moment you have 3 or
+more tasks that do not depend on each other's output, spawn them as parallel agents or a Workflow —
+never run them one by one in a single context.
+
+Concrete triggers — each of these MUST fan out immediately, not read sequentially:
+
+- **Reading 3+ files** to understand a codebase → spawn parallel `Explore` agents, one per module/area
+- **Running 3+ search queries** across different angles → one `WebSearch` agent per angle, concurrently
+- **Evaluating 3+ experiment hypotheses** → one agent per hypothesis, not a serial loop
+- **Auditing previous work across multiple sources** (git log, test results, bench results, code) →
+  parallel agents each covering one source, then synthesize
+
+The default for any fan-out is the `Workflow` tool (for experiments) or parallel `Agent` calls (for
+research). Sequential tool calls — `Bash` after `Bash` after `Read` in the same turn — are acceptable
+only when each step depends on the previous one's output. If they don't depend on each other: **split**.
+
+Rule of thumb: if you catch yourself writing "now let me read X... now let me read Y... now let me
+read Z..." where X, Y, Z are independent — stop, spawn 3 agents, wait for results, synthesize.
+
+---
+
 ## HARD RULE: research-before-code (equal priority to autonomy mandate)
 
 **The second fatal failure mode — as common as stopping too early — is treating autoresearch as a
@@ -117,11 +140,51 @@ parent with `$AUTORESEARCH_RUNS_DIR`) and populate:
    the run mode (interactive vs headless/`-p`), and whether the task admits **many hypotheses worth
    sweeping** (it almost always does — that's the point of this skill).
 
+1.5. **Previous work audit — multi-agent codebase sweep (before internet research)** — before going
+   online, do a structured audit of what has **already been tried in this repo/project**. This prevents
+   re-doing work, surfaces the current baseline, and seeds the experiment matrix with proven starting
+   points. **This step is parallel: spawn one agent per source simultaneously, never read sequentially.**
+
+   Spawn all of the following as parallel `Agent` (subagent_type: `Explore`) calls in one message:
+   - **Agent A — Bench results**: find and read all `results/`, `eval_*.json`, `bench_*.json`,
+     `RESULTS.md`, `EXPERIMENTS.md` files. Extract: current best metric, which configs were tested,
+     which failed. Note the baseline number.
+   - **Agent B — Git history**: `git log --oneline -50` + `git diff HEAD~10..HEAD -- <relevant_files>`.
+     Extract: what changed recently, why (commit messages), any explicit "this improved / broke X".
+   - **Agent C — Existing experiments / notes**: find `PLAN.md`, `FINDINGS.md`, `autoresearch-runs/`,
+     any `TODO`, `FIXME`, `NOTE` comments in key files. Extract: abandoned ideas and why, open TODOs.
+   - **Agent D — Current code state**: read the core model/training/eval files. Extract: what
+     hyperparameters are currently set, any commented-out experiments, any `# TODO: try` comments.
+   - **Agent E — Test suite**: find and skim `*_test.py`, `test_*.py`, `conftest.py`. Extract: what's
+     tested, what's explicitly NOT tested (signals known fragile areas).
+
+   Synthesize all agent outputs into **`PREVIOUS_WORK.md`** using the same format as `DEEPRESEARCH.md`
+   (bullets + file:line references instead of URLs, no dumps):
+   ```
+   ## Current baseline
+   - metric: <value> (source: results/eval_foo.json)
+   ## What was tried and kept
+   - <change>: +<delta> (commit abc123, merged 2026-06-10)
+   ## What was tried and dropped
+   - <change>: <reason> (commit def456, reverted)
+   ## Open hypotheses / TODOs in the code
+   - <idea> (file.py:42)
+   ## Known fragile areas
+   - <area> (no tests; last broke in commit ghi789)
+   ```
+
+   Fire `notify.sh research_ready "previous_work_audit_done"`. Then proceed to internet research —
+   `DEEPRESEARCH.md` extends `PREVIOUS_WORK.md`, it does not replace it. The experiment matrix must
+   reference both sources.
+
 2. **Deep research — diverse literature + GitHub mining (before clarify)** — *always start by going
    out to the internet* and surveying what already exists across **multiple distinct angles**; never
    jump to experiments on priors alone and never mine only one source. The goal is to seed the
    experiment matrix with ideas from **maximally different communities** — not ten variations of the
    same paper. Run the full multi-source sweep below:
+
+   **Parallelism rule for internet research: spawn A–D as parallel agents in one message.** Each
+   agent covers one angle and returns a structured findings block. Never run them sequentially.
 
    **A. PapersWithCode + arXiv sweep (methods, benchmarks, SOTA):**
    - `bash scripts/pwc_search.sh "<task>" papers` (and `… methods` / `… datasets`)
@@ -129,13 +192,11 @@ parent with `$AUTORESEARCH_RUNS_DIR`) and populate:
    - HF Papers: fetch `https://huggingface.co/papers?q=<task>` — note any models with top downloads
 
    **B. GitHub idea mining (first-class source — do not skip):**
-   Run all three search angles; each surfaces different ideas than papers do:
    - `gh search repos "<task>" --language python --sort stars --limit 20` — top implementations
    - `gh search code "<key_function_or_class>" --language python --limit 15` — reusable building blocks
    - `gh search repos "<task> tricks OR ablation OR improve" --sort updated --limit 10` — experiment logs
    For the top 3-5 repos: fetch `README.md`, skim `CHANGELOG` or `EXPERIMENTS.md` if they exist,
-   and note every technique listed under "what helped", "ablations", or "tips". These are proven
-   engineering tricks that rarely appear in papers — they are high-value hypotheses.
+   and note every technique listed under "what helped", "ablations", or "tips".
 
    **C. Blog posts, tech reports, community tricks:**
    - `WebSearch "<task> tricks site:reddit.com OR site:huggingface.co/blog OR site:sebastianraschka.com"`
@@ -143,10 +204,9 @@ parent with `$AUTORESEARCH_RUNS_DIR`) and populate:
    - Fetch the top 2-3 hits and extract concrete, reproducible changes
 
    **D. Cross-domain transplant mining:**
-   For each "idea angle" in `IDEA_ANGLES.md` (see "Diversity-first idea mining" below), run one extra
-   query: `WebSearch "<angle_domain> <task equivalent>"` — techniques from adjacent fields that haven't
-   been ported. Example: task = "sequence classification" → angles include "time-series anomaly
-   detection", "protein secondary structure", "code understanding".
+   For each "idea angle" in `IDEA_ANGLES.md`, run one query: `WebSearch "<angle_domain> <task equivalent>"`.
+   Example: task = "sequence classification" → angles include "time-series anomaly detection", "protein
+   secondary structure", "code understanding".
 
    Cross-check claims: when two sources disagree on a number or a claim, note both and trust the one
    with code/leaderboard backing. Synthesize all findings into a cited `DEEPRESEARCH.md` (see format
