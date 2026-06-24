@@ -62,6 +62,21 @@ This skill's failure mode is **stopping too early and handing the work back to t
   the backlog is non-empty.** Proposing a good idea and then waiting to be poked is the exact lazy
   behaviour this skill exists to prevent. See a promising, in-budget, non-destructive lever → **launch
   it**, then report what you launched. Asking permission to keep researching is a failure of the skill.
+- **If YOU listed it, YOU do it.** Ending a turn with a bullet list of "next steps for the user"
+  (e.g. "1. Redeploy. 2. Run bench. 3. Implement X.") is identical to stopping early — you just
+  handed the work back with extra formatting. If those steps are in-budget and non-destructive, do
+  them yourself, right now, without asking. The only exception: steps that require the user's
+  credentials, physical hardware, or an irreversible prod action they haven't pre-approved.
+- **All code changes go into a git branch, never directly to main.** Create a branch at the start
+  of each experiment batch (`git checkout -b autoresearch/<slug>-gen<N>` or use isolation worktree).
+  Commit each experiment's diff individually so results are traceable and the branch can be reviewed
+  or rolled back. After a verified winner: open a PR or fast-forward — do NOT just leave changes
+  uncommitted on main. Working in a branch is not optional overhead; it is how the experiment
+  diff stays auditable.
+- **After any implementation, immediately measure the delta.** "Changes are shipped, ball in your
+  court to measure" is a failure. If you wrote or changed code, run the eval/bench before the turn
+  ends. If the bench is too slow for a full run, run a smoke test (smallest available split) and
+  report preliminary numbers with a note that the full bench is queued.
 - **"Stuck" means escalate the search space, not stop.** Running out of one-variable tweaks is NOT a
   done condition — it is the trigger to climb the **lever ladder** (below). You only truly stop when
   the budget is spent or you have climbed the whole ladder and the lever-generator itself returns
