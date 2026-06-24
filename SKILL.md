@@ -23,6 +23,33 @@ kept winner against a real held-out metric. The experiment matrix must be **maxi
 ideas from different papers, different algorithmic families, different ML communities — not
 variations of the same guess.
 
+## HARD RULE: research-before-code (equal priority to autonomy mandate)
+
+**The second fatal failure mode — as common as stopping too early — is treating autoresearch as a
+normal coding session**: reading the codebase, understanding what needs to change, and implementing
+it directly. That is NOT this skill. You are running **experiments**, not writing features.
+
+The difference: **you do not know which change will win before running it.** If you already know the
+answer, you don't need autoresearch. If you think you know — that's a hypothesis, and it goes into
+`PLAN.md` as experiment 0, then runs through the loop like every other hypothesis.
+
+**Hard gate — you may NOT edit any production file until `PLAN.md` exists and lists your change as a
+named experiment hypothesis.** The moment you find yourself reading source files with intent to
+implement immediately — stop, write the hypothesis to `PLAN.md` first (angle tag + causal mechanism
++ expected metric move), then treat it as experiment 0 in the generational loop.
+
+The pattern that is a failure of this skill:
+> "I see the codebase → I understand what to change → I implement it → done."
+
+The correct pattern:
+> "I read the codebase to understand the baseline → I research what's been tried → I propose
+> hypotheses with causal mechanisms → I run them as bounded experiments → I keep what wins."
+
+Implementing without a hypothesis, or implementing before research, collapses the entire value of
+this skill into a regular code change. Don't do it.
+
+---
+
 ## Autonomy mandate (do NOT be lazy — this is the most important rule)
 
 This skill's failure mode is **stopping too early and handing the work back to the human**. Fight it:
@@ -122,13 +149,23 @@ parent with `$AUTORESEARCH_RUNS_DIR`) and populate:
      `notify.sh approval_required "<assumptions, one line>"`, and proceed.
    - **Always** write `BUDGET.md` here (see "Experiment budget"), using defaults when nothing is given.
 
-4. **Plan (diversity-constrained)** — write `program.md` from `assets/program.template.md` and
-   `PLAN.md` (the **experiment matrix**). The matrix **must be maximally diverse**: apply the
-   angle-coverage check from "Diversity-first idea mining" before finalizing — every hypothesis must
-   (a) cite a paper/repo/post from `DEEPRESEARCH.md`, and (b) come from a **different idea angle**
-   than its neighbours. No two seed experiments may belong to the same angle-family unless the
-   matrix has more experiments than angles. If the first-pass matrix is too homogeneous, run idea
-   spinning (see below) to fill the gaps. Fire `notify.sh code_ready "<N experiments queued>"`.
+4. **Plan (diversity-constrained, mechanism-required)** — write `program.md` from
+   `assets/program.template.md` and `PLAN.md` (the **experiment matrix**).
+
+   **Anti-shortcut check:** before writing the matrix, verify you have not already edited any
+   production file. If you have — that edit is experiment 0; add it to the matrix as-is, measure
+   its delta, and continue from there. Do not pretend it was always planned.
+
+   Every hypothesis in the matrix MUST include three fields (from the think-first protocol):
+   - `mechanism`: one sentence causal path (A → B → C → metric)
+   - `expected_delta`: numeric estimate + direction (e.g. "−0.002 bpb, ~0.3% relative")
+   - `falsification`: what result would disprove the mechanism
+
+   The matrix **must be maximally diverse**: apply the angle-coverage check — every hypothesis cites
+   a paper/repo/post from `DEEPRESEARCH.md` and comes from a different angle. Include ≥1 angle-K
+   (scale-first) and ≥1 angle-F (kernel/efficiency) hypothesis. No two seed experiments may share
+   an angle unless the matrix has more experiments than angles. Run idea spinning if homogeneous.
+   Fire `notify.sh code_ready "<N experiments queued>"`.
 
 5. **Provision compute (auto-detect)** — pick where experiments actually run:
    - `bash scripts/gpu_probe.sh` → if `local_gpu=yes` with enough free VRAM, run locally.
@@ -189,11 +226,12 @@ least 5 distinct angles. Default angle list (extend for the specific task):
 | C | Architecture / model structure | Layer count, hidden dim, attention variant, normalization |
 | D | Data & augmentation | Sampling strategy, synthetic data, curriculum, data mix ratios |
 | E | Training objective / loss | Auxiliary heads, contrastive loss, distillation, self-supervised pre-task |
-| F | Efficiency / engineering | Mixed precision, activation checkpointing, batch packing, quantization |
+| F | Efficiency / kernel engineering | Fused kernels (fused cross-entropy, FlashAttention-2), `torch.compile`, mixed precision (bf16), activation checkpointing, batch packing, quantization, **parallel/concurrent execution** (batch_search, asyncio.gather for independent sub-queries, parallel data loading) — things that get better just by making the same compute faster or more concurrent |
 | G | Cross-domain transplant | A technique from an adjacent field (e.g. protein folding → NLP) |
-| H | Scaling & compute allocation | Wider vs deeper, more epochs vs more data, ensemble size |
+| H | Scaling & compute allocation | Wider vs deeper, more epochs vs more data, ensemble size, larger batch, longer context |
 | I | GitHub / open-source trick | A concrete technique found in a top-starred repo, not in papers |
 | J | Counterintuitive / antithesis | Something the community believes true — test its negation |
+| K | Scale-first (free wins) | Ideas that improve just from more compute/parallelism without any algorithmic change: larger batch size, gradient accumulation, multi-GPU data-parallel, async prefetch, bigger context window, more decoding steps. **Always include ≥1 angle-K hypothesis in the seed matrix** — they're often the highest ROI and cheapest to verify. |
 
 Write `IDEA_ANGLES.md` in the run directory: one section per angle, listing ideas found for each.
 At minimum, seed experiments must cover angles A–E. If PapersWithCode + GitHub yield ideas for G/I/J,
@@ -257,17 +295,28 @@ The default fan-out (step 6) is **not** a single pass over a fixed matrix — it
 around the best ideas, **critique each other before spending compute**, and **share what they learn on
 a common board** so the search compounds instead of repeating itself. One generation:
 
-1. **Propose (parallel teams — diversity-assigned).** `__PROPOSERS__` proposer agents run
-   concurrently, each **assigned a distinct idea angle from `IDEA_ANGLES.md`**. An agent assigned
-   angle C (architecture) must generate architecture-family hypotheses; it must not re-propose what
-   angle A (optimization) already covers. Each proposer reads the shared board (`FINDINGS.md`,
-   `leaderboard.md`, `DEEPRESEARCH.md`, `IDEA_ANGLES.md`, `program.md`) and the current **champion**,
-   then proposes **fresh one-variable hypotheses** that (a) build on what works in their angle, (b)
-   are not on the already-tried list, and (c) cite a concrete source (paper, GitHub repo, blog post)
-   from `DEEPRESEARCH.md` or `IDEA_ANGLES.md`. Proposers are also given the **idea-spinner
-   transformations** and may apply them to the champion's best feature to generate orthogonal variants.
-   If a proposer's angle is exhausted, it climbs to "cross-domain transplant" (angle G) rather than
-   re-proposing from the same family.
+1. **Propose (parallel teams — diversity-assigned, think-first protocol).** `__PROPOSERS__` proposer
+   agents run concurrently, each **assigned a distinct idea angle from `IDEA_ANGLES.md`**. An agent
+   assigned angle C (architecture) must generate architecture-family hypotheses; it must not re-propose
+   what angle A (optimization) already covers. Each proposer reads the shared board (`FINDINGS.md`,
+   `leaderboard.md`, `DEEPRESEARCH.md`, `IDEA_ANGLES.md`, `program.md`) and the current **champion**.
+
+   **Think-first protocol (mandatory for every hypothesis):** Before writing a hypothesis, the
+   proposer must answer three questions in its scratchpad — only hypotheses with clear answers to all
+   three are allowed into the proposal:
+   - **Mechanism**: *Why* should this change improve the metric? Name the causal path
+     (e.g. "fused cross-entropy removes the N×vocab intermediate allocation → less peak memory →
+     larger effective batch at same VRAM → more gradient signal per step → lower loss").
+   - **Expected move**: How large a delta is plausible, and in which direction? ("expect −0.003 bpb,
+     i.e. ~0.5% relative gain"). A hypothesis with no expected size is not a hypothesis — it's a guess.
+   - **Falsification condition**: What result would tell us the mechanism hypothesis was *wrong*?
+     ("if loss is unchanged or worse, the bottleneck is not memory bandwidth but something else").
+
+   Proposers propose **fresh one-variable hypotheses** that (a) have a stated causal mechanism, (b)
+   build on what works in their angle, (c) are not on the already-tried list, and (d) cite a concrete
+   source from `DEEPRESEARCH.md` or `IDEA_ANGLES.md`. They may apply idea-spinner transformations to
+   the champion's best feature to generate orthogonal variants. If an angle is exhausted, climb to
+   angle G (cross-domain transplant) — do NOT re-propose from the same family.
 
 2. **Peer-critique (before any GPU) — diversity + quality filter.** A panel of `__CRITICS__` critic
    agents scores every proposal on three axes: (a) **quality** (expected impact × plausibility,
@@ -281,10 +330,13 @@ a common board** so the search compounds instead of repeating itself. One genera
 3. **Experiment + verify.** Survivors fan out exactly like the single-pass mode: copy harness, apply
    one diff, train for `seconds_per_experiment`, eval, and adversarially re-check kept winners.
 
-4. **Share (update the board).** The `Share` phase appends this generation's results to
-   `board.jsonl`, rewrites the human `FINDINGS.md` (what worked, what to avoid, open directions),
-   updates `leaderboard.md` + the champion, **and updates `IDEA_ANGLES.md`** — marking each tried
-   idea with its outcome so the next proposers know what territory is already mapped.
+4. **Share (update the board) — mechanism audit.** The `Share` phase appends results to `board.jsonl`,
+   rewrites `FINDINGS.md`, updates `leaderboard.md` + champion, and updates `IDEA_ANGLES.md`. It also
+   runs a **mechanism audit** on every kept winner: does the observed delta match the predicted
+   mechanism? Write one sentence: "Winner: X. Predicted: Y. Observed: Z. Mechanism confirmed/refuted
+   because W." If the mechanism is refuted (the delta is real but came from a different effect),
+   record that insight — it often reveals a better hypothesis for the next generation than the winning
+   idea itself.
 
 5. **Champion + stagnation → climb the lever ladder.** The best *verified* config is the champion; a
    new champion resets the stagnation counter. After `__STAGNATION__` no-champion generations the loop
